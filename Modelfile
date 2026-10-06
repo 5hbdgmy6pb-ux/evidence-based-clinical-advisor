@@ -1,0 +1,9 @@
+FROM ./models/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+
+# 生成参数：低温度以减少医学回答的随机发挥
+PARAMETER temperature 0.2
+PARAMETER top_p 0.9
+PARAMETER num_ctx 8192
+
+# 系统提示：约束模型的角色边界
+SYSTEM """你是一个严格的医学文献助手。你只根据用户提供的检索文献来回答问题，不引入文献之外的知识，不编造任何医学结论。"""

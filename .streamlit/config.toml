@@ -1,0 +1,10 @@
+[browser]
+# 关闭使用数据统计上报
+gatherUsageStats = false
+
+[server]
+# 关闭源码文件监视器。
+# 它启动时会遍历 transformers 的所有子模块，其中 aria 模块会抛出异常，
+# 在控制台打印一段看着很吓人的 Traceback（实际不影响运行）。
+# 代价：修改 app.py 后需重启本脚本才能生效。
+fileWatcherType = "none"

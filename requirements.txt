@@ -1,0 +1,15 @@
+# 循证临床顾问 —— 核心依赖
+#
+# 安装：pip install -r requirements.txt
+# 另外还需要安装 Ollama 并导入 Qwen2.5-7B 模型，见 README。
+#
+# 版本已钉死为本项目实际验证通过的组合。
+# 不要随手升级 qdrant-client：本项目的检索代码用的是 1.19 的新 API
+# （query_points）。旧教程里的 client.search() 已被移除，
+# 升级/降级都可能导致检索直接报错。详见 README「踩坑 2」。
+
+ollama==0.6.3
+pymedx==0.5.1
+qdrant-client==1.19.1
+sentence-transformers==6.1.0
+streamlit==1.64.0

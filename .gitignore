@@ -1,0 +1,31 @@
+# 注意：gitignore 不支持行尾注释，注释必须独占一行。
+# 写成 `models/  # 说明` 会让整行变成模式，什么都匹配不到。
+
+# ===== 大体积资源（数 GB，克隆后按 README 重新下载）=====
+# Qwen2.5-7B GGUF，4.4GB
+models/
+# PubMedBERT 权重，837MB
+pubmedbert-embeddings/
+# 虚拟环境，1.6GB
+venv/
+
+# ===== 本地运行时数据 =====
+# 向量库，每次提问自动重建
+local_qdrant/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ===== 日志与临时文件 =====
+*.log
+
+# ===== 本地凭据（含个人邮箱，不要入库）=====
+.streamlit/credentials.toml
+
+# ===== 编辑器与系统 =====
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
