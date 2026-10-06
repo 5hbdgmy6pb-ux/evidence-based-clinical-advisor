@@ -12,7 +12,109 @@
 
 ---
 
-## 快速启动
+## 从零搭建（克隆本项目的人看这节）
+
+> 仓库里**只有源码**，一共 11 个文件 59KB。模型权重、虚拟环境、向量库都被
+> `.gitignore` 排除了——否则仓库会有 6.7GB，而且 GitHub 不接受超过 100MB 的单文件。
+> 所以 clone 下来之后必须补齐下面这些东西，**光有代码跑不起来**。
+
+### 前置要求
+
+| 项目 | 要求 |
+|---|---|
+| 操作系统 | Windows（启动脚本是 `.bat`；其他系统手动 `streamlit run app.py` 同样可用） |
+| Python | 3.11 以上（本项目在 3.14.0 验证） |
+| Ollama | 任意较新版本（本项目在 0.35.0 验证） |
+| 内存 | 16GB（7B Q4 模型加载后约占 5~6GB） |
+| 磁盘 | 约 12GB（模型 5.5GB + 依赖 1.6GB + 余量） |
+
+### 需要额外下载的东西
+
+| 内容 | 大小 | 来源 |
+|---|---|---|
+| Ollama 本体 | ~700MB | [ollama.com/download](https://ollama.com/download) |
+| Qwen2.5-7B-Instruct Q4_K_M（GGUF 单文件） | ~4.7GB | 步骤 3 |
+| PubMedBERT 医学嵌入模型 | 837MB | 步骤 4 |
+
+### 步骤
+
+**1. 克隆并装依赖**
+
+```bash
+git clone https://github.com/<你的用户名>/evidence-based-clinical-advisor.git
+cd evidence-based-clinical-advisor
+
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+`pip` 这一步会拉 PyTorch 等一批包（几百 MB），需要几分钟。
+
+**2. 安装 Ollama 并让它保持运行**（托盘出现羊驼图标即为运行中）
+
+**3. 下载模型并导入 Ollama**
+
+HuggingFace / ModelScope 上超过约 4GB 的 GGUF 通常被切成多个分片，
+**分片版无法直接导入**（原因见「踩坑 7」）。必须用**单文件**版本：
+ModelScope 上 `bartowski/Qwen2.5-7B-Instruct-GGUF` 仓库里的
+`Qwen2.5-7B-Instruct-Q4_K_M.gguf`。
+
+下好后**放进 `models/` 目录，文件名保持原样**：
+
+```
+my-health-agent/
+└── models/
+    └── Qwen2.5-7B-Instruct-Q4_K_M.gguf
+```
+
+路径和文件名一个字都不能改——`Modelfile` 第一行是相对路径
+`FROM ./models/Qwen2.5-7B-Instruct-Q4_K_M.gguf`。
+
+然后导入：
+
+```bash
+ollama create qwen2.5:7b -f Modelfile
+```
+
+> 这一步只是把 GGUF 拷进 Ollama 的 blob 存储并登记生成参数，
+> 不会产生第二份大文件。之后改提示词**不需要**重新执行。
+
+**4. 下载医学嵌入模型**
+
+```bash
+hf download NeuML/pubmedbert-base-embeddings --local-dir ./pubmedbert-embeddings
+```
+
+必须下到 **`./pubmedbert-embeddings`** 这个目录（对应 `rag_engine.py` 里的
+`EMBED_MODEL_LOCAL_DIR`）。国内直连 HuggingFace 会超时，
+但 `rag_engine.py` 开头已自动设置 `HF_ENDPOINT=https://hf-mirror.com`，不用手动配。
+
+**5. 建 Streamlit 凭据文件**
+
+在**用户主目录**（不是项目目录）建 `.streamlit\credentials.toml`：
+
+```toml
+[general]
+email = ""
+```
+
+不建的话第一次启动会卡在 `Email:` 提示，服务器根本起不来（见「踩坑 9」）。
+这个文件不在仓库里，**每个使用者各自建**（里面是个人邮箱，不应入库）。
+
+**6.（可选）换成自己的邮箱**
+
+`pubmed_search.py` 顶部的 `CONTACT_EMAIL` 现在是占位符 `your_email@example.com`。
+NCBI 的规定是调用方提供邮箱，填占位符照样能检索，但建议改成自己的——
+出问题时 NCBI 会发邮件而不是直接封 IP。
+
+**7. 启动**
+
+双击 `启动助手.bat`。
+
+---
+
+## 快速启动（环境已搭好）
 
 双击 `启动助手.bat`，浏览器会自动打开 http://localhost:8501。
 
