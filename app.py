@@ -113,7 +113,7 @@ if submitted:
         with st.chat_message("assistant"):
             try:
                 _, clinical_consultation = load_rag_engine()
-                with st.spinner("正在检索 PubMed 文献并做临床分析（首次约 20 秒）..."):
+                with st.spinner("正在评估病情并检索分析（首次约 20 秒）..."):
                     report = clinical_consultation(engine_intake)
                 st.markdown(report)
                 st.session_state.messages.append({"role": "assistant", "content": report})
