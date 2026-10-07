@@ -27,7 +27,10 @@ echo 界面会立即打开；首次提问时加载模型，约 15 秒。
 echo 关闭本窗口即可停止服务。
 echo.
 
-python -m streamlit run app.py
+rem 钉死端口：端口被占用时 Streamlit 不会报错，而是静默顺延到 8502，
+rem 于是出现「两个实例、却只有一个能打开本地数据库」的假象。
+rem 钉死后，第二次启动会明确报错。
+python -m streamlit run app.py --server.port 8501
 
 echo.
 echo 服务已停止。
