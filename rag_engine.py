@@ -435,12 +435,44 @@ def build_patient_profile(intake):
     return "\n".join(f"{label}：{value}" for label, value in fields if value)
 
 
+# 检查/操作类词汇。检索式一旦带上它们，PubMed 会整片召回顾内镜、影像、
+# 外科手术类文献——实测「上腹隐痛 2 天」被翻成 gastrointestinal endoscopy 后，
+# 36 篇里二十多篇是内镜/结肠镜/ERCP/ESD，跟「这个症状可能是什么病」无关。
+# 提示词里已经写了禁令，但 7B 并不总听，所以这里再做一道确定性过滤。
+_PROCEDURE_QUERY_RE = re.compile(
+    r"\b("
+    r"endoscop\w*|colonoscop\w*|gastroscop\w*|sigmoidoscop\w*|laparoscop\w*|"
+    r"bronchoscop\w*|biops\w*|ultrasound|sonograph\w*|radiograph\w*|"
+    r"tomograph\w*|imaging|mri|ct|screen\w*|surg\w*|operat\w*|resection"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# 空壳检索式。禁掉检查类词汇后，模型会退化成只写 "management guidelines"、
+# "prognosis" 这种不含任何疾病/症状名的检索式——它们同样召回随机文献
+# （实测召回肾移植随访、卟啉病、心衰）。要求每条检索式里至少有一个
+# 具体词，否则丢弃。
+_GENERIC_QUERY_WORDS = {
+    "management", "treatment", "therapy", "therapies", "guideline",
+    "guidelines", "prognosis", "diagnosis", "diagnostic", "follow",
+    "up", "screening", "care", "overview", "review", "approach",
+    "clinical", "evidence", "current", "recent", "update", "practice",
+    "of", "for", "and", "in", "on", "the", "a", "an", "to", "with",
+}
+
+
+def _is_generic_query(query):
+    """检索式里若没有任何具体疾病/症状词，就只是个空壳，应予丢弃。"""
+    tokens = re.findall(r"[a-z]+", query.lower())
+    return not tokens or all(t in _GENERIC_QUERY_WORDS for t in tokens)
+
+
 def generate_clinical_queries(profile, max_queries=3):
     """
     根据病例生成 2~3 条英文 PubMed 检索式。
 
     这是「回答太宽泛」的根因所在：原方案只用一条检索式，召回的全是泛泛的
-    综述。拆成诊断 / 治疗 / 检查三条后，治疗方案那条才会真正召回治疗类文献。
+    综述。拆成诊断 / 治疗 / 预后三条后，治疗方案那条才会真正召回治疗类文献。
     """
     response = ollama.chat(
         model=LLM_MODEL,
@@ -449,11 +481,17 @@ def generate_clinical_queries(profile, max_queries=3):
             "content": (
                 "下面是一份中文病例。请为 PubMed 文献检索生成英文检索式。\n"
                 "要求：\n"
-                "1. 每行一条，最多 3 条；不要编号、不要解释、不要引号。\n"
-                "2. 第 1 条面向「鉴别诊断 / 疾病临床特征」。\n"
-                "3. 第 2 条面向「最可能疾病的治疗与管理指南」。\n"
-                "4. 第 3 条可选，补充相关检查或预后。\n"
-                "5. 每条只用英文医学术语，不要写成整句。\n\n"
+                "1. 每行一条，共 3 条；不要编号、不要解释、不要引号。\n"
+                "2. 三条分别面向：疾病临床特征与鉴别、治疗与管理、预后与随访。\n"
+                "3. 【每一条都必须包含具体的疾病名或症状名】。只写\n"
+                "   management、guidelines、prognosis、treatment 这类空泛词\n"
+                "   会被丢弃，因为那样的检索式召回的是随机文献。\n"
+                "   反例：management guidelines、prognosis、treatment\n"
+                "   正例：acute gastroenteritis management、dyspepsia prognosis\n"
+                "   若还不能确定具体疾病，就用症状名，例如 epigastric pain。\n"
+                "4. 每条只用英文医学术语，不要写成整句。\n"
+                "5. 严禁检查、操作、手术类词汇：endoscopy、colonoscopy、CT、\n"
+                "   MRI、ultrasound、biopsy、surgery、screening 等。\n\n"
                 f"病例：\n{profile}"
             ),
         }],
@@ -466,6 +504,15 @@ def generate_clinical_queries(profile, max_queries=3):
         q = line.strip().lstrip("0123456789.-)*） ").strip().strip('"').strip()
         if q and q not in queries:
             queries.append(q)
+
+    # 确定性过滤：剔除检查/操作类、以及不含具体疾病/症状名的空壳检索式。
+    # 全被滤掉时保留原样——宁可检索质量差一点，也不要变成没得检索。
+    kept = [
+        q for q in queries
+        if not _PROCEDURE_QUERY_RE.search(q) and not _is_generic_query(q)
+    ]
+    if kept:
+        queries = kept
 
     queries = queries[:max_queries]
     if not queries:
@@ -511,6 +558,50 @@ def retrieve_multi(queries, top_k=6):
             if title not in best or doc["score"] > best[title]["score"]:
                 best[title] = doc
     return sorted(best.values(), key=lambda d: d["score"], reverse=True)[:top_k]
+
+
+# 人群不符关键词。为什么会反复召回到这些文献：PubMed 的高证据过滤下，
+# 「儿童腹痛」类文章标题里字面就有 abdominal pain，向量相似度天然排前，
+# 于是 21 岁男性的上腹痛，top 6 里有 3 篇是儿童腹痛（实测）。
+# 后果不是「引错文献」那么轻——模型会拿文献倒推病人，写出
+# 「腹痛是儿童常见症状，且患者年龄符合」，把 21 岁改写成儿童。
+# 这是病历事实被篡改，所以按人群做确定性剔除，不交给模型判断。
+PEDIATRIC_KEYWORDS = (
+    "pediatric", "paediatric", "children", "child", "neonat", "infant",
+    "adolescen",
+)
+CRITICAL_CARE_KEYWORDS = (
+    "intensive care", "critically ill", "critical care", "icu",
+)
+
+
+def _parse_age(age_text):
+    """从「21 岁」「21」这类文本里取出年龄整数；取不到返回 None。"""
+    if age_text is None:
+        return None
+    match = re.search(r"\d+", str(age_text))
+    return int(match.group()) if match else None
+
+
+def filter_population_mismatch(docs, age):
+    """
+    剔除研究人群与本例明显不符的文献。
+
+    成人（>=18 岁）病例：儿科 / 新生儿类文献一律剔除——「儿童腹痛」的结论
+    不能用于成人，这是硬规则，跟疾病本身像不像无关。ICU / 危重患者类文献
+    同样剔除：这份表单是给普通人自查用的，住院危重病人的研究对他没有意义。
+
+    年龄取不到时**不做任何过滤**——宁可保留几篇不对口的，也不要因为一个
+    解析失败就把全部文献删光。返回空列表是允许的，调用方按「无适用文献」处理。
+    """
+    age_value = _parse_age(age)
+    if age_value is None or age_value < 18:
+        return docs
+    drop = PEDIATRIC_KEYWORDS + CRITICAL_CARE_KEYWORDS
+    return [
+        doc for doc in docs
+        if not any(k in (doc.get("title") or "").lower() for k in drop)
+    ]
 
 
 def generate_clinical_report(profile, context, mode="evidence"):
@@ -600,9 +691,9 @@ def clinical_consultation(intake):
     0. 红旗关键词筛查 —— 命中即直接提示立即就医，后面全部跳过
     1. 模型分流 —— 兜住关键词漏掉的急症，并决定报告以常识还是文献为主
     2. 表单字段 → 中文临床小结
-    3. 生成 2~3 条英文检索式（诊断 / 治疗 / 检查）
+    3. 生成 2~3 条英文检索式（诊断 / 治疗 / 预后），并剔除检查类检索式
     4. 逐条检索 PubMed 并按 pmid 去重
-    5. 入库 + 多路召回
+    5. 入库 + 多路召回，再按人群剔除不对口文献
     6. 生成结构化临床报告
     """
     profile = build_patient_profile(intake)
@@ -640,14 +731,36 @@ def clinical_consultation(intake):
     ingest_articles(articles)
     relevant_docs = retrieve_multi(queries, top_k=6)
 
-    context = "\n\n---\n\n".join([
-        f"[文献 {i + 1}] {doc['title']} ({doc['journal']}, {doc['year']})\n{doc['text']}"
-        for i, doc in enumerate(relevant_docs)
-    ])
+    # 按人群剔除不对口文献。必须在拼 context 之前做：context 里的 [文献 N]
+    # 与末尾参考文献列表共用同一套编号，两边必须是同一个列表，
+    # 否则正文引用和文末原文对不上。
+    kept_docs = filter_population_mismatch(relevant_docs, intake.get("age"))
+    if len(kept_docs) != len(relevant_docs):
+        print(f"按人群剔除不对口文献 {len(relevant_docs) - len(kept_docs)} 篇，"
+              f"保留 {len(kept_docs)} 篇")
+    relevant_docs = kept_docs
+
+    if relevant_docs:
+        context = "\n\n---\n\n".join([
+            f"[文献 {i + 1}] {doc['title']} ({doc['journal']}, {doc['year']})\n{doc['text']}"
+            for i, doc in enumerate(relevant_docs)
+        ])
+    else:
+        # 一篇都不剩时不能塞空字符串进提示词——模型会理解成「文献里没提到」，
+        # 然后自由发挥。必须明确告诉它：没有可引用的文献，别编引用。
+        context = (
+            "（未检索到适用于本例的文献：检索到的文献其研究人群与本例不符，"
+            "已全部剔除。）\n"
+            "本例没有可引用的文献，请完全基于一般医学常识作答，"
+            "不要输出任何 [文献编号]。若某个判断确实需要文献支持，"
+            "直接说明「未检索到适用于本例的文献」。"
+        )
 
     print(f"正在生成临床报告...（模式：{triage['mode']}）")
     report = generate_clinical_report(profile, context, mode=triage["mode"])
 
     # 参考文献列表由 Python 从真实检索结果生成，不经模型之手，
     # 保证标题/期刊/年份不会张冠李戴
+    if not relevant_docs:
+        return report
     return report + format_references(relevant_docs)
